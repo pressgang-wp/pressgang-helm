@@ -29,18 +29,31 @@ Helm does not mutate WordPress state by default, silently execute tools, or make
 
 ---
 
-## Design Rules (Non-Negotiable)
+## Design Principles
+
+### WordPress First
+
+When diverging from patterns found in other frameworks (e.g. Laravel AI), prefer WordPress-native APIs:
+
+- **HTTP**: `wp_remote_post()` / `wp_remote_get()` via `WpHttpTransport`, not Guzzle or cURL wrappers
+- **Caching**: `wp_cache_get()` / `wp_cache_set()` and transients, not custom cache layers
+- **Scheduling**: Action Scheduler or `wp_schedule_event()`, not custom job systems
+- **Hooks**: `do_action()` / `apply_filters()` for extensibility, not custom event dispatchers
+- **Options**: `get_option()` / `update_option()` for persistent settings
+- **Config**: PressGang's `Config::get()` system, not a separate config repository
+
+Only deviate from WordPress APIs when they are demonstrably inadequate for the task.
 
 ### Explicit Over Magic
 
 - No facades, hidden globals, or "ambient" state.
-- All configuration must be passed explicitly or resolved via `ConfigRepositoryContract`.
+- All configuration resolved via PressGang's `Config` system in the WP layer, or passed explicitly in core.
 - Request DTOs must be inspectable — dumpable and serialisable for debugging.
 
 ### Provider-Agnostic Core
 
-- Code under `src/` (outside `src/WP/`) must never call WordPress functions.
-- WordPress integration lives in `src/WP/` only.
+- Code under `src/` (outside `src/WP/`) must never call WordPress or PressGang functions.
+- WordPress and PressGang integration lives in `src/WP/` only.
 - Providers are drivers implementing `ProviderContract`; core cannot assume OpenAI/Anthropic specifics.
 
 ### Deterministic Contracts
@@ -64,49 +77,56 @@ Helm does not mutate WordPress state by default, silently execute tools, or make
 
 ## Architecture
 
-### Three Layers
+### Two Layers
 
 | Layer | Location | Responsibility |
 |---|---|---|
-| **Core** | `src/` (except `WP/`) | Contracts, DTOs, builders, validation, streaming abstractions. Framework-agnostic. |
-| **Providers** | `src/Providers/` | Driver implementations behind `ProviderContract`. Depend on `TransportContract`. |
-| **WP Adapter** | `src/WP/` | WP HTTP transport, config resolution, tool registry hooks/filters, WP-CLI (if added). |
+| **Core** | `src/` (except `WP/`) | Contracts, DTOs, builders, providers, validation, streaming. Framework-agnostic, zero dependencies. |
+| **PressGang Adapter** | `src/WP/` | Boots Helm via PressGang config, provides WP HTTP transport, registers tools via filters, exposes hooks for observability. |
 
 ### Core Boundaries
 
 Core **must**:
 
-- Define stable contracts (`ProviderContract`, `ToolContract`, `TransportContract`, `ConfigRepositoryContract`)
+- Define stable contracts (`ProviderContract`, `ToolContract`, `TransportContract`)
+- Contain provider drivers (OpenAI, Anthropic) that depend only on `TransportContract`
 - Normalise provider responses into Helm response types
 - Validate structured output against JSON schema
 - Expose a small, cohesive public API (`Helm`, `ChatBuilder`)
 
 Core **must not**:
 
-- Read environment variables or WordPress options directly
-- Call `wp_remote_request()` or any WP function
+- Read environment variables, WordPress options, or PressGang config directly
+- Call `wp_remote_request()`, `Config::get()`, or any WP/PressGang function
+- Import any class from `PressGang\` (parent framework) or WordPress
 
-### WP Adapter Boundaries
+### PressGang Adapter Boundaries
 
-WP adapter **must**:
+The adapter in `src/WP/` bridges Helm's core into the PressGang ecosystem.
 
-- Resolve config from constants > env > WP options > package defaults (in that order)
-- Provide `WpHttpTransport` wrapping the WP HTTP API
-- Register tools via filters safely
-- Provide debug hooks/actions for observability
+Adapter **must**:
 
-WP adapter **must not**:
+- Resolve config via PressGang's `Config::get('helm')` — no separate config repository
+- Provide `WpHttpTransport` implementing `TransportContract` via `wp_remote_post()`
+- Bootstrap Helm via a `HelmServiceProvider` following PressGang's service provider pattern
+- Register tools via `apply_filters('pressgang_helm_tools', [])`
+- Provide observability hooks: `do_action('pressgang_helm_request', $request)`, `do_action('pressgang_helm_response', $response)`
+- Enforce `current_user_can()` capability checks on tool execution that mutates state
+- Enforce nonce verification and input sanitisation where applicable
 
-- Leak WordPress dependencies into core namespaces
+Adapter **must not**:
+
+- Leak WordPress or PressGang dependencies into core namespaces
 - Force global state mutation
 
-### WordPress Security (WP Adapter Only)
+### How PressGang Integration Works
 
-Any code under `src/WP/` that writes or mutates state must enforce:
+Helm registers as a PressGang package. No custom config loader or service container needed.
 
-- `current_user_can()` capability checks
-- Nonce verification where applicable
-- Sanitisation and validation of all user input
+1. **`config/helm.php`** — picked up automatically by PressGang's `FileConfigLoader`. Child themes can override via their own `config/helm.php`.
+2. **`HelmServiceProvider`** — reads config via `Config::get('helm')`, resolves transport and provider, wires the `Helm` instance.
+3. **Hooks** — `pressgang_helm_*` actions/filters follow PressGang convention. Tool registration, request/response lifecycle, and error reporting all use WordPress hooks.
+4. **Child theme overrides** — config values, tool lists, and provider selection can all be filtered.
 
 ---
 
@@ -114,19 +134,23 @@ Any code under `src/WP/` that writes or mutates state must enforce:
 
 ```
 pressgang-helm/
-├── config/                  # Package config defaults (arrays returning arrays)
+├── config/                  # Package config defaults (loaded by PressGang's FileConfigLoader)
 │   └── helm.php
 ├── src/
-│   ├── Helm.php             # Main entry point
-│   ├── Contracts/           # Interfaces (ProviderContract, ToolContract, etc.)
-│   ├── Chat/                # ChatBuilder + Message value object
+│   ├── Helm.php             # Main entry point (receives provider + config)
+│   ├── Contracts/           # Interfaces (ProviderContract, ToolContract, TransportContract)
+│   ├── Chat/                # ChatBuilder
 │   ├── DTO/                 # Immutable request/response value objects
 │   ├── Schema/              # JSON schema validation + coercion
 │   ├── Tools/               # Tool registry primitives
 │   ├── Streaming/           # Stream event types + handlers
 │   ├── Exceptions/          # Typed exception classes
-│   ├── Providers/           # Provider drivers
-│   └── WP/                  # WordPress adapter (only WP-dependent code)
+│   ├── Providers/           # Provider drivers (OpenAI, Anthropic, Fake)
+│   ├── Transport/           # CurlTransport (standalone, no WP)
+│   └── WP/                  # PressGang adapter layer
+│       ├── HelmServiceProvider.php
+│       ├── WpHttpTransport.php
+│       └── HelmContextManager.php (if needed for Timber/Twig)
 ├── stubs/                   # Userland scaffolds (Agent/Tool/Provider templates)
 ├── tests/                   # PHPUnit tests (no WP runtime)
 └── composer.json
@@ -164,20 +188,30 @@ Everything else is internal and may change without notice.
 
 ## Configuration
 
-Config is declarative. Core uses `ConfigRepositoryContract` to access:
+Config is declarative and managed by PressGang's config system.
 
-- Provider name
-- API key
-- Default model
-- Timeouts / retries
-- Logging / telemetry flags (optional)
+### Config Shape (`config/helm.php`)
 
-WP adapter resolves config in precedence order:
+```php
+return [
+    'provider'    => 'openai',
+    'model'       => 'gpt-4o',
+    'api_key'     => '',
+    'temperature' => 1.0,
+    'timeout'     => 30,
+    'retries'     => 1,
+    'logging'     => false,
+];
+```
 
-1. PHP constants (explicit, highest priority)
-2. Environment variables
-3. WordPress options (if enabled)
-4. Package defaults (`config/helm.php`)
+### Resolution Order (in PressGang Adapter)
+
+1. Child theme `config/helm.php` overrides (via PressGang's `FileConfigLoader` merge)
+2. Parent theme `config/helm.php` defaults
+3. `apply_filters('pressgang_get_config', $config)` for runtime overrides
+4. Constants and environment variables can be injected via the filter or config file
+
+Core receives the resolved config array — it never knows where values came from.
 
 No config resolution at file-load time.
 
@@ -221,6 +255,16 @@ interface ToolContract
 - Tools must not perform writes unless explicitly designed and guarded in the WP adapter.
 - Inputs and outputs are arrays only (JSON-safe).
 
+### Tool Registration (WP Adapter)
+
+Tools are registered via WordPress filter in the adapter:
+
+```php
+$tools = apply_filters('pressgang_helm_tools', []);
+```
+
+Theme and plugin code registers tools by hooking the filter. The adapter validates and allow-lists before passing to core.
+
 ---
 
 ## Streaming
@@ -250,7 +294,7 @@ Exceptions must include enough context for debugging. Never include raw API keys
 
 ## Code Style
 
-- **PHP 8.1+** with typed properties and return types.
+- **PHP 8.3+** with typed properties and return types.
 - **No `declare(strict_types=1)`** — matches PressGang ecosystem convention.
 - No global functions in Helm core.
 - One class per file, small and cohesive (SRP).
@@ -282,9 +326,21 @@ Doc blocks are part of Helm's developer experience. Required tiering:
 
 ## Testing
 
-- **PHPUnit** — preferred for consistency with PressGang.
+### Stack
+
+- **PHPUnit** — consistent with PressGang ecosystem.
+- **PressGang Muster** (`pressgang-wp/muster`) — extend for AI-specific test seeding and fakes.
 - **No WordPress runtime** in unit tests. WP behaviour is behind `src/WP/` and tested via seams.
 - Tests live under `tests/` mirroring `src/` structure.
+
+### Muster Integration
+
+Helm extends Muster rather than building a separate fake/mock layer:
+
+- **`FakeProvider`** — already exists, implements `ProviderContract` with static responses. Lives in `src/Providers/` (part of core, no WP dependency).
+- **Victuals extension** — extend Muster's `Victuals` with AI-specific fake data generators (e.g. deterministic chat responses, token usage, tool call payloads) for seeding test scenarios.
+- **WordPress stubs** — reuse Muster's `WordPressStubs` for offline testing of `src/WP/` adapter code without a WP runtime.
+- **Response builders** — provide builder helpers for constructing test `ChatRequest`, `Message`, and `Response` objects with sensible defaults via Muster's seeded Faker.
 
 ### Testability Seams
 
@@ -292,7 +348,7 @@ Hard dependencies (static calls, constructors with side effects, WP functions) m
 
 1. A contract (preferred), or
 2. A protected method seam (acceptable), or
-3. An injected transport / config repository
+3. An injected transport
 
 Never put unmockable calls at file-load time.
 
@@ -308,19 +364,21 @@ Never put unmockable calls at file-load time.
 
 ## Implementing a Change
 
-1. **Choose the correct layer**: contracts/DTOs -> core, HTTP details -> transport/provider, WP specifics -> `src/WP/`.
-2. Add or extend DTOs and builder methods.
-3. Write tests for the new behaviour.
-4. Add doc blocks for invariants and extension points.
-5. Keep diffs minimal — no opportunistic refactors.
+1. **Choose the correct layer**: contracts/DTOs/providers -> core, WP/PressGang specifics -> `src/WP/`.
+2. **Prefer WordPress APIs** when adding WP adapter functionality. Check if WordPress provides a native solution before introducing abstractions.
+3. Add or extend DTOs and builder methods.
+4. Write tests for the new behaviour.
+5. Add doc blocks for invariants and extension points.
+6. Keep diffs minimal — no opportunistic refactors.
 
 ---
 
 ## Hard Failures (Never Do These)
 
-- Call WordPress functions from outside `src/WP/`
+- Call WordPress or PressGang functions from outside `src/WP/`
 - Introduce remote calls during autoload or construction
 - Execute tools without explicit registry + allow-listing
 - Swallow schema validation errors
 - Add global helper functions in core
 - Leak secrets in logs or exceptions
+- Reinvent infrastructure that PressGang or WordPress already provides
