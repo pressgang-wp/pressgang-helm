@@ -13,8 +13,8 @@ Helm is the AI orchestration layer for the PressGang ecosystem. It provides a Wo
 - Chat/completions-style requests
 - Tool/function execution
 - Structured output (JSON schema validation)
-- Streaming (evented responses)
-- Embeddings and related primitives (deferred)
+- Embeddings and related primitives
+- Streaming (deferred — most use cases are server-side where full response is needed)
 
 Helm is **infrastructure**, not a chatbot widget. It exists to make AI usage explicit, deterministic where possible, testable, and safe to run inside WordPress.
 
@@ -143,7 +143,6 @@ pressgang-helm/
 │   ├── DTO/                 # Immutable request/response value objects
 │   ├── Schema/              # JSON schema validation + coercion
 │   ├── Tools/               # Tool registry primitives
-│   ├── Streaming/           # Stream event types + handlers
 │   ├── Exceptions/          # Typed exception classes
 │   ├── Providers/           # Provider drivers (OpenAI, Anthropic, Fake)
 │   ├── Transport/           # CurlTransport (standalone, no WP)
@@ -264,16 +263,6 @@ $tools = apply_filters('pressgang_helm_tools', []);
 ```
 
 Theme and plugin code registers tools by hooking the filter. The adapter validates and allow-lists before passing to core.
-
----
-
-## Streaming
-
-When implemented, streaming:
-
-- Must be event-driven (token deltas, tool calls, final message, errors)
-- Must not require ReactPHP or other heavyweight dependencies
-- Must degrade gracefully to non-stream mode
 
 ---
 
