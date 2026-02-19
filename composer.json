@@ -1,0 +1,33 @@
+{
+    "name": "pressgang-wp/pressgang-helm",
+    "description": "Provider-agnostic AI orchestration layer for the PressGang ecosystem.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Benedict Wallis",
+            "email": "ben@benedict-wallis.com"
+        }
+    ],
+    "require": {
+        "php": "^8.3"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "PressGang\\Helm\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PressGang\\Helm\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
