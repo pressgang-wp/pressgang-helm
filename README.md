@@ -5,7 +5,7 @@ Helm is structured, provider-agnostic AI orchestration for WordPress in the Pres
 ## Installation
 
 ```bash
-composer require pressgang-wp/pressgang-helm
+composer require pressgang-wp/helm
 ```
 
 ## Quickstart

@@ -1,5 +1,5 @@
 {
-    "name": "pressgang-wp/pressgang-helm",
+    "name": "pressgang-wp/helm",
     "description": "Provider-agnostic AI orchestration layer for the PressGang ecosystem.",
     "type": "library",
     "license": "MIT",
