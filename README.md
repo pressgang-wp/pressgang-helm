@@ -43,7 +43,8 @@ Implemented:
 - PressGang adapter:
   - `HelmServiceProvider` boots Helm from `config/helm.php`
   - `HookAwareProvider` fires lifecycle hooks (`pressgang_helm_request`, `pressgang_helm_response`, `pressgang_helm_error`)
-  - Tool collection via `pressgang_helm_tools` filter
+  - Config-driven tool registration via `tools` key in `config/helm.php`
+  - Dynamic tool collection via `pressgang_helm_tools` filter
   - Instance access via `pressgang_helm_instance` filter
 
 Not implemented yet (on roadmap):
@@ -175,6 +176,8 @@ return [
     'provider' => 'anthropic',
     'model'    => 'claude-sonnet-4-20250514',
     'api_key'  => defined('HELM_API_KEY') ? HELM_API_KEY : getenv('HELM_API_KEY'),
+    'timeout'  => 30,
+    'tools'    => [],
 ];
 ```
 
