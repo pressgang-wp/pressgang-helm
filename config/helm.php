@@ -14,4 +14,7 @@ return [
     'timeout' => 30,
     'retries' => 1,
     'logging' => false,
+    'openai' => [
+        'base_url' => 'https://api.openai.com/v1',
+    ],
 ];

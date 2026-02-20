@@ -145,7 +145,6 @@ pressgang-helm/
 │   ├── Tools/               # Tool registry primitives
 │   ├── Exceptions/          # Typed exception classes
 │   ├── Providers/           # Provider drivers (OpenAI, Anthropic, Fake)
-│   ├── Transport/           # CurlTransport (standalone, no WP)
 │   └── WP/                  # PressGang adapter layer
 │       ├── HelmServiceProvider.php
 │       ├── WpHttpTransport.php
