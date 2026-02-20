@@ -297,4 +297,102 @@ class HelmServiceProviderTest extends TestCase
         $this->assertEmpty(WpHooks::$filters);
         $this->assertEmpty(WpHooks::$actions);
     }
+
+    public function test_fallback_providers_resolved_from_config(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'provider' => 'openai',
+            'fallback_providers' => ['anthropic'],
+            'anthropic' => [
+                'api_key' => 'sk-anthropic-key',
+                'base_url' => 'https://api.anthropic.com/v1',
+                'max_tokens' => 4096,
+                'api_version' => '2023-06-01',
+            ],
+        ]));
+        $sp->boot();
+
+        // Fallback providers are applied to the ChatBuilder via WordPressHelm::chat()
+        // Verify that the Helm instance was created successfully
+        $this->assertInstanceOf(Helm::class, $sp->helm());
+    }
+
+    public function test_empty_fallback_providers_produces_no_fallbacks(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'fallback_providers' => [],
+        ]));
+        $sp->boot();
+
+        $this->assertInstanceOf(Helm::class, $sp->helm());
+    }
+
+    public function test_invalid_fallback_provider_key_throws_configuration_exception(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'fallback_providers' => ['gemini'],
+        ]));
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessage('helm.gemini.api_key must be set');
+
+        $sp->boot();
+    }
+
+    public function test_non_array_fallback_providers_throws_configuration_exception(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'fallback_providers' => 'anthropic',
+        ]));
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessage('helm.fallback_providers config must be an array');
+
+        $sp->boot();
+    }
+
+    public function test_invalid_fallback_provider_entry_type_throws_configuration_exception(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'fallback_providers' => [123],
+        ]));
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessage('must be a non-empty provider key string');
+
+        $sp->boot();
+    }
+
+    public function test_fallback_provider_missing_provider_specific_api_key_throws_configuration_exception(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'provider' => 'openai',
+            'fallback_providers' => ['anthropic'],
+            'anthropic' => [
+                // intentionally missing api_key
+                'base_url' => 'https://api.anthropic.com/v1',
+                'max_tokens' => 4096,
+                'api_version' => '2023-06-01',
+            ],
+        ]));
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessage('helm.anthropic.api_key must be set');
+
+        $sp->boot();
+    }
+
+    public function test_fallback_provider_config_must_be_array(): void
+    {
+        $sp = new HelmServiceProvider($this->validConfig([
+            'provider' => 'openai',
+            'fallback_providers' => ['anthropic'],
+            'anthropic' => 'invalid',
+        ]));
+
+        $this->expectException(ConfigurationException::class);
+        $this->expectExceptionMessage('helm.anthropic config must be an array');
+
+        $sp->boot();
+    }
 }

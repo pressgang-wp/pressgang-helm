@@ -16,11 +16,13 @@ class WordPressHelm extends Helm
 {
     /**
      * @param \Closure(): array<int, \PressGang\Helm\Contracts\ToolContract> $toolResolver
+     * @param \PressGang\Helm\Contracts\ProviderContract[] $fallbackProviders
      */
     public function __construct(
         \PressGang\Helm\Contracts\ProviderContract $provider,
         array $config,
         protected \Closure $toolResolver,
+        protected array $fallbackProviders = [],
     ) {
         parent::__construct($provider, $config);
     }
@@ -35,6 +37,10 @@ class WordPressHelm extends Helm
 
         if ($tools !== []) {
             $builder->tools($tools);
+        }
+
+        if ($this->fallbackProviders !== []) {
+            $builder->fallbackProviders($this->fallbackProviders);
         }
 
         return $builder;

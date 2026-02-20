@@ -46,10 +46,17 @@ class Helm
      */
     public function chat(): ChatBuilder
     {
-        return new ChatBuilder(
+        $builder = new ChatBuilder(
             provider: $this->provider,
             model: $this->config['model'] ?? null,
         );
+
+        $retries = $this->config['retries'] ?? 0;
+        if ($retries > 0) {
+            $builder->retries($retries);
+        }
+
+        return $builder;
     }
 
     /**

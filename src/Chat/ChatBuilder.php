@@ -13,6 +13,7 @@ use PressGang\Helm\DTO\ToolResult;
 use PressGang\Helm\Exceptions\ConfigurationException;
 use PressGang\Helm\Exceptions\SchemaValidationException;
 use PressGang\Helm\Exceptions\ToolExecutionException;
+use PressGang\Helm\Retry\RetryHandler;
 use PressGang\Helm\Schema\SchemaValidator;
 use Throwable;
 
@@ -45,6 +46,11 @@ class ChatBuilder
     protected ?int $maxSteps = null;
 
     protected int $repairAttempts = 0;
+
+    protected int $retries = 0;
+
+    /** @var ProviderContract[] */
+    protected array $fallbackProviders = [];
 
     /**
      * @param ProviderContract $provider The provider to dispatch requests to.
@@ -197,6 +203,51 @@ class ChatBuilder
     }
 
     /**
+     * Set the number of retry attempts for transient provider failures.
+     *
+     * @param int $retries Maximum retries per provider (0 = no retries).
+     *
+     * @return $this
+     *
+     * @throws ConfigurationException If retries is negative.
+     */
+    public function retries(int $retries): static
+    {
+        if ($retries < 0) {
+            throw new ConfigurationException('Retries must be zero or greater.');
+        }
+
+        $this->retries = $retries;
+
+        return $this;
+    }
+
+    /**
+     * Set fallback providers to try when the primary provider fails.
+     *
+     * @param ProviderContract[] $providers Fallback providers in priority order.
+     *
+     * @return $this
+     *
+     * @throws ConfigurationException If any entry is not a ProviderContract.
+     */
+    public function fallbackProviders(array $providers): static
+    {
+        foreach ($providers as $index => $provider) {
+            if (!$provider instanceof ProviderContract) {
+                $type = get_debug_type($provider);
+                throw new ConfigurationException(
+                    "Fallback provider at index {$index} must implement ProviderContract, got {$type}."
+                );
+            }
+        }
+
+        $this->fallbackProviders = $providers;
+
+        return $this;
+    }
+
+    /**
      * Build the immutable ChatRequest and send it to the provider.
      *
      * When tools are registered, runs an agentic loop: if the provider
@@ -216,7 +267,7 @@ class ChatBuilder
     public function send(): Response
     {
         $request = $this->toRequest();
-        $response = $this->provider->chat($request);
+        $response = $this->callProvider($request);
         $steps = 0;
         $maxSteps = $this->maxSteps ?? max(count($this->toolDefinitions) * 2, 5);
 
@@ -226,7 +277,7 @@ class ChatBuilder
             $this->appendToolResults($results);
 
             $request = $this->toRequest();
-            $response = $this->provider->chat($request);
+            $response = $this->callProvider($request);
             $steps++;
         }
 
@@ -321,7 +372,31 @@ class ChatBuilder
 
         $request = $this->toRequest();
 
-        return $this->provider->chat($request);
+        return $this->callProvider($request);
+    }
+
+    /**
+     * Dispatch a chat request through retry/failover when configured.
+     *
+     * When retries or fallback providers are configured, delegates to RetryHandler.
+     * Otherwise calls the provider directly (zero overhead path).
+     *
+     * @param ChatRequest $request The immutable chat request.
+     *
+     * @return Response
+     */
+    protected function callProvider(ChatRequest $request): Response
+    {
+        if ($this->retries === 0 && $this->fallbackProviders === []) {
+            return $this->provider->chat($request);
+        }
+
+        $handler = new RetryHandler(
+            maxRetries: $this->retries,
+            fallbackProviders: $this->fallbackProviders,
+        );
+
+        return $handler->execute($this->provider, $request);
     }
 
     /**

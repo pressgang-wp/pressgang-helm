@@ -53,7 +53,7 @@ Not implemented yet (on roadmap):
 - Embeddings API
 - Conversation memory store
 - Agent abstraction
-- Provider failover/retry policy
+- ~~Provider failover/retry policy~~ (implemented)
 
 ## 🗺️ What This Means Right Now
 
@@ -232,6 +232,40 @@ add_filter('pressgang_helm_tools', function (array $tools) {
     return $tools;
 });
 ```
+
+### Retry & Provider Failover
+
+Helm retries transient API failures (timeouts, 429 rate limits, 5xx server errors) with exponential backoff. Set retries in config or per-request:
+
+```php
+// config/helm.php
+return [
+    'provider'  => 'openai',
+    'model'     => 'gpt-4o',
+    'api_key'   => defined('HELM_API_KEY') ? HELM_API_KEY : getenv('HELM_API_KEY'),
+    'retries'   => 2,  // retry transient failures up to 2 times
+    'fallback_providers' => ['anthropic'],  // try Anthropic if OpenAI exhausted
+    'anthropic' => [
+        'api_key'     => defined('HELM_ANTHROPIC_KEY') ? HELM_ANTHROPIC_KEY : getenv('HELM_ANTHROPIC_KEY'),
+        'base_url'    => 'https://api.anthropic.com/v1',
+        'max_tokens'  => 4096,
+        'api_version' => '2023-06-01',
+    ],
+];
+```
+
+Override per-request via the builder:
+
+```php
+$response = $helm
+    ->chat()
+    ->retries(3)
+    ->fallbackProviders([$backupProvider])
+    ->user('Hello')
+    ->send();
+```
+
+Client errors (400, 401, 403, 404) are never retried — they skip directly to the next provider. All existing lifecycle hooks fire for each attempt, giving full observability.
 
 ### Lifecycle Hooks
 

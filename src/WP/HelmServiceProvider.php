@@ -53,10 +53,13 @@ class HelmServiceProvider implements ServiceProviderInterface
         $provider = self::resolveProvider($this->config, $transport);
         $hookAwareProvider = new HookAwareProvider($provider);
 
+        $fallbackProviders = $this->resolveFallbackProviders($transport);
+
         $this->helm = new WordPressHelm(
             provider: $hookAwareProvider,
             config: $this->config,
             toolResolver: fn () => $this->collectTools(),
+            fallbackProviders: $fallbackProviders,
         );
 
         \add_filter('pressgang_helm_instance', [$this, 'filterHelmInstance']);
@@ -92,6 +95,72 @@ class HelmServiceProvider implements ServiceProviderInterface
             'anthropic' => new AnthropicProvider($transport, $config),
             default => throw new ConfigurationException("Unknown provider: {$name}"),
         };
+    }
+
+    /**
+     * Resolve fallback providers from config.
+     *
+     * Each entry in config['fallback_providers'] is a provider key (e.g. 'anthropic').
+     * The provider-specific config section is merged into the base config, and
+     * each resolved provider is wrapped in HookAwareProvider for observability.
+     *
+     * @param TransportContract $transport The HTTP transport.
+     *
+     * @return ProviderContract[]
+     *
+     * @throws ConfigurationException If a fallback provider key is invalid.
+     */
+    protected function resolveFallbackProviders(TransportContract $transport): array
+    {
+        $fallbackKeys = $this->config['fallback_providers'] ?? [];
+
+        if (!is_array($fallbackKeys)) {
+            $type = get_debug_type($fallbackKeys);
+            throw new ConfigurationException(
+                "helm.fallback_providers config must be an array, got {$type}.",
+            );
+        }
+
+        if ($fallbackKeys === []) {
+            return [];
+        }
+
+        $providers = [];
+        $primaryProvider = $this->config['provider'] ?? 'openai';
+
+        foreach ($fallbackKeys as $index => $key) {
+            if (!is_string($key) || $key === '') {
+                $type = get_debug_type($key);
+                throw new ConfigurationException(
+                    "helm.fallback_providers entry at index {$index} must be a non-empty provider key string, got {$type}.",
+                );
+            }
+
+            $providerSpecific = $this->config[$key] ?? [];
+            if (!is_array($providerSpecific)) {
+                $type = get_debug_type($providerSpecific);
+                throw new ConfigurationException(
+                    "helm.{$key} config must be an array when used as a fallback provider, got {$type}.",
+                );
+            }
+
+            if ($key !== $primaryProvider && !array_key_exists('api_key', $providerSpecific)) {
+                throw new ConfigurationException(
+                    "helm.{$key}.api_key must be set when '{$key}' is configured as a fallback provider.",
+                );
+            }
+
+            $providerConfig = array_merge(
+                $this->config,
+                $providerSpecific,
+                ['provider' => $key],
+            );
+
+            $provider = self::resolveProvider($providerConfig, $transport);
+            $providers[] = new HookAwareProvider($provider);
+        }
+
+        return $providers;
     }
 
     /**
