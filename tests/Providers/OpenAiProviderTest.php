@@ -164,16 +164,13 @@ class OpenAiProviderTest extends TestCase
         $provider->chat($this->makeRequest(['temperature' => null]));
     }
 
-    public function test_chat_sends_tools_when_present(): void
+    public function test_chat_sends_tools_in_openai_format(): void
     {
-        $tools = [
+        $normalizedTools = [
             [
-                'type' => 'function',
-                'function' => [
-                    'name' => 'get_weather',
-                    'description' => 'Get the weather',
-                    'parameters' => ['type' => 'object', 'properties' => []],
-                ],
+                'name' => 'get_weather',
+                'description' => 'Get the weather',
+                'parameters' => ['type' => 'object', 'properties' => []],
             ],
         ];
 
@@ -185,12 +182,19 @@ class OpenAiProviderTest extends TestCase
                 $this->anything(),
                 $this->anything(),
                 $this->anything(),
-                $this->callback(fn (array $body) => $body['tools'] === $tools),
+                $this->callback(function (array $body) {
+                    $tool = $body['tools'][0] ?? [];
+
+                    return $tool['type'] === 'function'
+                        && $tool['function']['name'] === 'get_weather'
+                        && $tool['function']['description'] === 'Get the weather'
+                        && isset($tool['function']['parameters']);
+                }),
             )
             ->willReturn($this->openAiResponse());
 
         $provider = $this->makeProvider($transport);
-        $provider->chat($this->makeRequest(['tools' => $tools]));
+        $provider->chat($this->makeRequest(['tools' => $normalizedTools]));
     }
 
     public function test_chat_omits_tools_when_empty(): void
@@ -410,6 +414,29 @@ class OpenAiProviderTest extends TestCase
         $response = $provider->chat($this->makeRequest());
 
         $this->assertSame('', $response->content);
+    }
+
+    public function test_chat_throws_on_malformed_tool_call_payload(): void
+    {
+        $transport = $this->fakeTransport([
+            'choices' => [
+                [
+                    'message' => [
+                        'role' => 'assistant',
+                        'tool_calls' => [
+                            ['function' => ['arguments' => '{}']],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $provider = $this->makeProvider($transport);
+
+        $this->expectException(ProviderException::class);
+        $this->expectExceptionMessage('Malformed tool call in OpenAI response');
+
+        $provider->chat($this->makeRequest());
     }
 
     public function test_constructor_throws_when_api_key_is_missing(): void

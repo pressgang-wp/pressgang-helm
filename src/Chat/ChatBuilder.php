@@ -3,17 +3,23 @@
 namespace PressGang\Helm\Chat;
 
 use PressGang\Helm\Contracts\ProviderContract;
+use PressGang\Helm\Contracts\ToolContract;
 use PressGang\Helm\DTO\ChatRequest;
 use PressGang\Helm\DTO\Message;
 use PressGang\Helm\DTO\Response;
+use PressGang\Helm\DTO\ToolCall;
+use PressGang\Helm\DTO\ToolResult;
 use PressGang\Helm\Exceptions\ConfigurationException;
+use PressGang\Helm\Exceptions\ToolExecutionException;
+use Throwable;
 
 /**
  * Fluent builder for constructing and sending chat completion requests.
  *
  * Collects messages, model settings, tools, and schema constraints,
  * then produces an immutable ChatRequest and dispatches it to a provider.
- * ChatBuilder is the primary user-facing API for composing AI requests.
+ * When tools are provided, runs an agentic loop that executes tool calls
+ * and feeds results back until the model produces a final text response.
  */
 class ChatBuilder
 {
@@ -24,11 +30,16 @@ class ChatBuilder
 
     protected ?float $temperature = null;
 
-    /** @var array<int, array<string, mixed>> */
-    protected array $tools = [];
+    /** @var array<int, array<string, mixed>> Tool definitions for the request. */
+    protected array $toolDefinitions = [];
+
+    /** @var array<string, ToolContract> Tool implementations keyed by name. */
+    protected array $toolObjects = [];
 
     /** @var array<string, mixed>|null */
     protected ?array $schema = null;
+
+    protected ?int $maxSteps = null;
 
     /**
      * @param ProviderContract $provider The provider to dispatch requests to.
@@ -100,13 +111,47 @@ class ChatBuilder
     /**
      * Set the tools available for this request.
      *
-     * @param array<int, array<string, mixed>> $tools Tool definitions.
+     * Accepts an array of ToolContract implementations. The builder converts
+     * them to provider-agnostic definitions for the request and keeps the
+     * implementations for tool execution in the agentic loop.
+     *
+     * @param array<int, ToolContract> $tools Tool implementations.
      *
      * @return $this
+     *
+     * @throws ToolExecutionException If duplicate tool names are provided.
      */
     public function tools(array $tools): static
     {
-        $this->tools = $tools;
+        $this->toolDefinitions = [];
+        $this->toolObjects = [];
+
+        foreach ($tools as $tool) {
+            if (isset($this->toolObjects[$tool->name()])) {
+                throw new ToolExecutionException("Duplicate tool name: {$tool->name()}");
+            }
+
+            $this->toolObjects[$tool->name()] = $tool;
+            $this->toolDefinitions[] = [
+                'name' => $tool->name(),
+                'description' => $tool->description(),
+                'parameters' => $tool->inputSchema(),
+            ];
+        }
+
+        return $this;
+    }
+
+    /**
+     * Set the maximum number of tool execution steps.
+     *
+     * @param int $steps Maximum loop iterations before stopping.
+     *
+     * @return $this
+     */
+    public function maxSteps(int $steps): static
+    {
+        $this->maxSteps = $steps;
 
         return $this;
     }
@@ -128,15 +173,33 @@ class ChatBuilder
     /**
      * Build the immutable ChatRequest and send it to the provider.
      *
+     * When tools are registered, runs an agentic loop: if the provider
+     * returns tool calls, executes them, appends results, and re-sends
+     * until the model produces a text response or max steps is reached.
+     *
      * @return Response The normalised provider response.
      *
-     * @throws ConfigurationException If no model has been set.
+     * @throws ConfigurationException  If no model has been set.
+     * @throws ToolExecutionException  If a tool fails or is not found.
      */
     public function send(): Response
     {
         $request = $this->toRequest();
+        $response = $this->provider->chat($request);
+        $steps = 0;
+        $maxSteps = $this->maxSteps ?? max(count($this->toolDefinitions) * 2, 5);
 
-        return $this->provider->chat($request);
+        while ($response->hasToolCalls() && $this->toolObjects !== [] && $steps < $maxSteps) {
+            $results = $this->executeTools($response->toolCalls);
+            $this->appendAssistantMessage($response);
+            $this->appendToolResults($results);
+
+            $request = $this->toRequest();
+            $response = $this->provider->chat($request);
+            $steps++;
+        }
+
+        return $response;
     }
 
     /**
@@ -158,8 +221,88 @@ class ChatBuilder
             messages: $this->messages,
             model: $this->model,
             temperature: $this->temperature,
-            tools: $this->tools,
+            tools: $this->toolDefinitions,
             schema: $this->schema,
         );
+    }
+
+    /**
+     * Execute tool calls and return results.
+     *
+     * @param array<int, ToolCall> $toolCalls The tool calls from the provider response.
+     *
+     * @return array<int, ToolResult>
+     *
+     * @throws ToolExecutionException If a tool is not found or fails.
+     */
+    protected function executeTools(array $toolCalls): array
+    {
+        $results = [];
+
+        foreach ($toolCalls as $toolCall) {
+            if (!isset($this->toolObjects[$toolCall->name])) {
+                throw new ToolExecutionException("Tool not found: {$toolCall->name}");
+            }
+
+            $tool = $this->toolObjects[$toolCall->name];
+            try {
+                $result = $tool->handle($toolCall->arguments);
+            } catch (Throwable $e) {
+                throw new ToolExecutionException(
+                    "Tool execution failed: {$toolCall->name}",
+                    0,
+                    $e,
+                );
+            }
+
+            if (!is_array($result)) {
+                throw new ToolExecutionException("Tool {$toolCall->name} must return an array result.");
+            }
+
+            $results[] = new ToolResult(
+                toolCallId: $toolCall->id,
+                name: $toolCall->name,
+                result: $result,
+            );
+        }
+
+        return $results;
+    }
+
+    /**
+     * Append the assistant's response (including tool calls) as a message.
+     *
+     * @param Response $response The provider response with tool calls.
+     */
+    protected function appendAssistantMessage(Response $response): void
+    {
+        $this->messages[] = new Message(
+            role: 'assistant',
+            content: $response->content,
+            toolCalls: $response->toolCalls,
+        );
+    }
+
+    /**
+     * Append tool results as individual messages.
+     *
+     * @param array<int, ToolResult> $results The tool execution results.
+     */
+    protected function appendToolResults(array $results): void
+    {
+        foreach ($results as $result) {
+            $content = json_encode($result->result);
+            if ($content === false) {
+                throw new ToolExecutionException(
+                    "Tool result for {$result->name} could not be JSON encoded."
+                );
+            }
+
+            $this->messages[] = new Message(
+                role: 'tool',
+                content: $content,
+                toolCallId: $result->toolCallId,
+            );
+        }
     }
 }

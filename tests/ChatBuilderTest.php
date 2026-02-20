@@ -2,6 +2,7 @@
 
 namespace PressGang\Helm\Tests;
 
+use PressGang\Helm\Contracts\ToolContract;
 use PressGang\Helm\DTO\ChatRequest;
 use PressGang\Helm\DTO\Response;
 use PressGang\Helm\Exceptions\ConfigurationException;
@@ -57,17 +58,20 @@ class ChatBuilderTest extends TestCase
 
     public function test_tools_sets_tools_on_request(): void
     {
-        $tools = [
-            ['name' => 'search', 'description' => 'Search the web'],
-        ];
+        $tool = $this->createMock(ToolContract::class);
+        $tool->method('name')->willReturn('search');
+        $tool->method('description')->willReturn('Search the web');
+        $tool->method('inputSchema')->willReturn(['type' => 'object', 'properties' => []]);
 
         $request = $this->helm()
             ->chat()
-            ->tools($tools)
+            ->tools([$tool])
             ->user('Hi')
             ->toRequest();
 
-        $this->assertSame($tools, $request->tools);
+        $this->assertCount(1, $request->tools);
+        $this->assertSame('search', $request->tools[0]['name']);
+        $this->assertSame('Search the web', $request->tools[0]['description']);
     }
 
     public function test_json_schema_sets_schema_on_request(): void
