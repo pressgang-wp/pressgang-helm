@@ -7,10 +7,13 @@ use PressGang\Helm\Contracts\ToolContract;
 use PressGang\Helm\DTO\ChatRequest;
 use PressGang\Helm\DTO\Message;
 use PressGang\Helm\DTO\Response;
+use PressGang\Helm\DTO\StructuredResponse;
 use PressGang\Helm\DTO\ToolCall;
 use PressGang\Helm\DTO\ToolResult;
 use PressGang\Helm\Exceptions\ConfigurationException;
+use PressGang\Helm\Exceptions\SchemaValidationException;
 use PressGang\Helm\Exceptions\ToolExecutionException;
+use PressGang\Helm\Schema\SchemaValidator;
 use Throwable;
 
 /**
@@ -40,6 +43,8 @@ class ChatBuilder
     protected ?array $schema = null;
 
     protected ?int $maxSteps = null;
+
+    protected int $repairAttempts = 0;
 
     /**
      * @param ProviderContract $provider The provider to dispatch requests to.
@@ -171,16 +176,42 @@ class ChatBuilder
     }
 
     /**
+     * Set the number of repair attempts for structured output validation.
+     *
+     * When validation fails, the error context is fed back to the model
+     * and a new response is requested, up to this many times.
+     *
+     * @param int $attempts Maximum repair retries (0 = no retries).
+     *
+     * @return $this
+     */
+    public function repair(int $attempts): static
+    {
+        if ($attempts < 0) {
+            throw new ConfigurationException('Repair attempts must be zero or greater.');
+        }
+
+        $this->repairAttempts = $attempts;
+
+        return $this;
+    }
+
+    /**
      * Build the immutable ChatRequest and send it to the provider.
      *
      * When tools are registered, runs an agentic loop: if the provider
      * returns tool calls, executes them, appends results, and re-sends
      * until the model produces a text response or max steps is reached.
      *
-     * @return Response The normalised provider response.
+     * When a JSON schema is set, validates the response and returns a
+     * StructuredResponse. If repair attempts are configured, feeds
+     * validation errors back to the model for correction.
      *
-     * @throws ConfigurationException  If no model has been set.
-     * @throws ToolExecutionException  If a tool fails or is not found.
+     * @return Response|StructuredResponse The normalised provider response.
+     *
+     * @throws ConfigurationException      If no model has been set.
+     * @throws ToolExecutionException      If a tool fails or is not found.
+     * @throws SchemaValidationException   If structured output fails validation.
      */
     public function send(): Response
     {
@@ -199,7 +230,98 @@ class ChatBuilder
             $steps++;
         }
 
+        if ($this->schema !== null) {
+            return $this->validateStructuredOutput($response, $request);
+        }
+
         return $response;
+    }
+
+    /**
+     * Validate the response against the JSON schema and return a StructuredResponse.
+     *
+     * If repair attempts are configured, feeds validation errors back to the
+     * model and retries up to the configured number of times.
+     *
+     * @param Response    $response The provider response to validate.
+     * @param ChatRequest $request  The original request (for exception context).
+     *
+     * @return StructuredResponse
+     *
+     * @throws SchemaValidationException If validation fails after all attempts.
+     */
+    protected function validateStructuredOutput(Response $response, ChatRequest $request): StructuredResponse
+    {
+        $attemptsRemaining = $this->repairAttempts;
+
+        while (true) {
+            $data = json_decode($response->content, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                if ($attemptsRemaining > 0) {
+                    $attemptsRemaining--;
+                    $response = $this->retryWithError(
+                        $response,
+                        "Your response is not valid JSON: " . json_last_error_msg()
+                            . "\n\nPlease respond with valid JSON matching the schema.",
+                    );
+                    continue;
+                }
+
+                throw new SchemaValidationException(
+                    'Response is not valid JSON.',
+                    validationErrors: [json_last_error_msg()],
+                    rawOutput: $response->content,
+                    requestContext: $request->toArray(),
+                );
+            }
+
+            $errors = SchemaValidator::validate($data, $this->schema);
+
+            if ($errors === []) {
+                return new StructuredResponse(
+                    structured: $data,
+                    content: $response->content,
+                    raw: $response->raw,
+                );
+            }
+
+            if ($attemptsRemaining > 0) {
+                $attemptsRemaining--;
+                $errorList = implode("\n", $errors);
+                $response = $this->retryWithError(
+                    $response,
+                    "Your JSON response has validation errors:\n{$errorList}"
+                        . "\n\nPlease fix these errors and respond with valid JSON matching the schema.",
+                );
+                continue;
+            }
+
+            throw new SchemaValidationException(
+                'Response does not match schema.',
+                validationErrors: $errors,
+                rawOutput: $response->content,
+                requestContext: $request->toArray(),
+            );
+        }
+    }
+
+    /**
+     * Append the assistant's failed response and error feedback, then re-send.
+     *
+     * @param Response $response     The failed response to include as context.
+     * @param string   $errorMessage The validation error feedback for the model.
+     *
+     * @return Response The new provider response.
+     */
+    protected function retryWithError(Response $response, string $errorMessage): Response
+    {
+        $this->messages[] = new Message(role: 'assistant', content: $response->content);
+        $this->messages[] = new Message(role: 'user', content: $errorMessage);
+
+        $request = $this->toRequest();
+
+        return $this->provider->chat($request);
     }
 
     /**
