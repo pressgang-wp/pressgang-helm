@@ -8,6 +8,7 @@ use PressGang\Helm\Contracts\TransportContract;
 use PressGang\Helm\Exceptions\ConfigurationException;
 use PressGang\Helm\Helm;
 use PressGang\Helm\Providers\AnthropicProvider;
+use PressGang\Helm\Providers\GeminiProvider;
 use PressGang\Helm\Providers\OpenAiProvider;
 use PressGang\ServiceProviders\ServiceProviderInterface;
 use Throwable;
@@ -93,6 +94,7 @@ class HelmServiceProvider implements ServiceProviderInterface
         return match ($name) {
             'openai' => new OpenAiProvider($transport, $config),
             'anthropic' => new AnthropicProvider($transport, $config),
+            'gemini' => new GeminiProvider($transport, $config),
             default => throw new ConfigurationException("Unknown provider: {$name}"),
         };
     }

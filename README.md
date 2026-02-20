@@ -16,7 +16,7 @@ composer require pressgang-wp/helm
 
 ## 🌊 Why Helm
 
-- ⚓ Provider-agnostic core (`OpenAI`, `Anthropic`, `Fake`)
+- ⚓ Provider-agnostic core (`OpenAI`, `Anthropic`, `Gemini`, `Fake`)
 - 🧰 Tool execution loop with explicit contracts and max-step guardrails
 - 🧱 Structured output with JSON schema validation + repair retries
 - 🧪 High test coverage and deterministic DTO contracts
@@ -28,7 +28,7 @@ composer require pressgang-wp/helm
 Implemented:
 
 - Core public API: `Helm`, `ChatBuilder`, DTOs, contracts
-- Providers: `OpenAiProvider`, `AnthropicProvider`, `FakeProvider`
+- Providers: `OpenAiProvider`, `AnthropicProvider`, `GeminiProvider`, `FakeProvider`
 - WordPress transport: `WpHttpTransport`
 - Tool execution loop:
   - register tools via `->tools([...])` (`ToolContract` implementations)
@@ -101,6 +101,31 @@ $config = [
 
 $transport = new WpHttpTransport($config);
 $provider = new OpenAiProvider($transport, $config);
+$helm = Helm::make($provider, $config);
+
+$response = $helm->chat()->user('Say hello in one sentence.')->send();
+echo $response->content;
+```
+
+## 🤖 Quickstart (Gemini Provider)
+
+```php
+use PressGang\Helm\Helm;
+use PressGang\Helm\Providers\GeminiProvider;
+use PressGang\Helm\WP\WpHttpTransport;
+
+$config = [
+    'provider' => 'gemini',
+    'model' => 'gemini-2.5-flash',
+    'api_key' => 'AIza...',
+    'timeout' => 30,
+    'gemini' => [
+        'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
+    ],
+];
+
+$transport = new WpHttpTransport($config);
+$provider = new GeminiProvider($transport, $config);
 $helm = Helm::make($provider, $config);
 
 $response = $helm->chat()->user('Say hello in one sentence.')->send();
@@ -244,12 +269,16 @@ return [
     'model'     => 'gpt-4o',
     'api_key'   => defined('HELM_API_KEY') ? HELM_API_KEY : getenv('HELM_API_KEY'),
     'retries'   => 2,  // retry transient failures up to 2 times
-    'fallback_providers' => ['anthropic'],  // try Anthropic if OpenAI exhausted
+    'fallback_providers' => ['anthropic', 'gemini'],  // try Anthropic then Gemini if OpenAI exhausted
     'anthropic' => [
         'api_key'     => defined('HELM_ANTHROPIC_KEY') ? HELM_ANTHROPIC_KEY : getenv('HELM_ANTHROPIC_KEY'),
         'base_url'    => 'https://api.anthropic.com/v1',
         'max_tokens'  => 4096,
         'api_version' => '2023-06-01',
+    ],
+    'gemini' => [
+        'api_key'  => defined('HELM_GEMINI_KEY') ? HELM_GEMINI_KEY : getenv('HELM_GEMINI_KEY'),
+        'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
     ],
 ];
 ```

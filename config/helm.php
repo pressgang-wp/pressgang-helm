@@ -24,4 +24,7 @@ return [
         'max_tokens' => 4096,
         'api_version' => '2023-06-01',
     ],
+    'gemini' => [
+        'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
+    ],
 ];

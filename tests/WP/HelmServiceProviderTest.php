@@ -7,6 +7,7 @@ use PressGang\Helm\Contracts\TransportContract;
 use PressGang\Helm\Exceptions\ConfigurationException;
 use PressGang\Helm\Helm;
 use PressGang\Helm\Providers\AnthropicProvider;
+use PressGang\Helm\Providers\GeminiProvider;
 use PressGang\Helm\Providers\OpenAiProvider;
 use PressGang\Helm\Tests\Stubs\ConfigToolStub;
 use PressGang\Helm\Tests\Stubs\NonInstantiableConfigToolStub;
@@ -65,13 +66,23 @@ class HelmServiceProviderTest extends TestCase
         $this->assertInstanceOf(OpenAiProvider::class, $provider);
     }
 
-    public function test_resolve_provider_throws_on_unknown_provider(): void
+    public function test_resolve_provider_returns_gemini_provider(): void
     {
         $transport = $this->createMock(TransportContract::class);
         $config = $this->validConfig(['provider' => 'gemini']);
 
+        $provider = HelmServiceProvider::resolveProvider($config, $transport);
+
+        $this->assertInstanceOf(GeminiProvider::class, $provider);
+    }
+
+    public function test_resolve_provider_throws_on_unknown_provider(): void
+    {
+        $transport = $this->createMock(TransportContract::class);
+        $config = $this->validConfig(['provider' => 'unknown-provider']);
+
         $this->expectException(ConfigurationException::class);
-        $this->expectExceptionMessage('Unknown provider: gemini');
+        $this->expectExceptionMessage('Unknown provider: unknown-provider');
 
         HelmServiceProvider::resolveProvider($config, $transport);
     }
