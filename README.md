@@ -20,7 +20,7 @@ composer require pressgang-wp/helm
 - 🧰 Tool execution loop with explicit contracts and max-step guardrails
 - 🧱 Structured output with JSON schema validation + repair retries
 - 🧪 High test coverage and deterministic DTO contracts
-- 🧩 WordPress adapter scaffolding ready for PressGang integration
+- 🧩 PressGang adapter: zero-setup boot from `config/helm.php`
 - 🛟 Clear failure modes with typed exceptions for safer debugging
 
 ## 📦 Current Status
@@ -40,9 +40,11 @@ Implemented:
   - `StructuredResponse` return type
   - `SchemaValidationException` with validation errors/raw output/request context
   - `->repair(n)` retry with validation feedback
-- WordPress adapter scaffolding:
-  - `HelmServiceProvider`
-  - `HookAwareProvider` (`pressgang_helm_request`, `pressgang_helm_response`, `pressgang_helm_error`)
+- PressGang adapter:
+  - `HelmServiceProvider` boots Helm from `config/helm.php`
+  - `HookAwareProvider` fires lifecycle hooks (`pressgang_helm_request`, `pressgang_helm_response`, `pressgang_helm_error`)
+  - Tool collection via `pressgang_helm_tools` filter
+  - Instance access via `pressgang_helm_instance` filter
 
 Not implemented yet (on roadmap):
 
@@ -51,7 +53,6 @@ Not implemented yet (on roadmap):
 - Conversation memory store
 - Agent abstraction
 - Provider failover/retry policy
-- Complete PressGang production wiring hardening
 
 ## 🗺️ What This Means Right Now
 
@@ -157,6 +158,94 @@ $response = $helm
 
 echo $response['score'];
 echo $response['feedback'];
+```
+
+## 🧩 PressGang Integration
+
+The `src/WP/` adapter layer is intended for PressGang themes and expects PressGang runtime classes (for example `ServiceProviderInterface` and `Config`).
+Helm core (`src/` outside `src/WP/`) remains provider-agnostic and framework-agnostic.
+
+### Config
+
+Add `config/helm.php` to your child theme. PressGang's `FileConfigLoader` picks it up automatically:
+
+```php
+// config/helm.php
+return [
+    'provider' => 'anthropic',
+    'model'    => 'claude-sonnet-4-20250514',
+    'api_key'  => defined('HELM_API_KEY') ? HELM_API_KEY : getenv('HELM_API_KEY'),
+];
+```
+
+### Service Provider Registration
+
+Register Helm in your PressGang service provider config:
+
+```php
+// config/service-providers.php
+return [
+    \PressGang\Helm\WP\HelmServiceProvider::class,
+];
+```
+
+### Usage
+
+Retrieve the Helm instance anywhere in your theme:
+
+```php
+$helm = apply_filters('pressgang_helm_instance', null);
+
+$response = $helm
+    ->chat()
+    ->user('Summarise this page for accessibility.')
+    ->send();
+
+echo $response->content;
+```
+
+### Register Tools
+
+For static theme-level tools, set classes in `config/helm.php`:
+
+```php
+return [
+    'provider' => 'anthropic',
+    'model'    => 'claude-sonnet-4-20250514',
+    'api_key'  => defined('HELM_API_KEY') ? HELM_API_KEY : getenv('HELM_API_KEY'),
+    'tools'    => [
+        \App\Ai\Tools\SearchProducts::class,
+        \App\Ai\Tools\GetOrderStatus::class,
+    ],
+];
+```
+
+For dynamic/plugin tools, use the `pressgang_helm_tools` filter:
+
+```php
+add_filter('pressgang_helm_tools', function (array $tools) {
+    $tools[] = new App\Ai\Tools\SearchProducts();
+    $tools[] = new App\Ai\Tools\GetOrderStatus();
+    return $tools;
+});
+```
+
+### Lifecycle Hooks
+
+`HookAwareProvider` wraps every provider call with WordPress actions:
+
+| Hook | Type | Payload |
+|---|---|---|
+| `pressgang_helm_request` | action | `ChatRequest` |
+| `pressgang_helm_response` | action | `Response`, `ChatRequest` |
+| `pressgang_helm_error` | action | `Throwable`, `ChatRequest` |
+
+Use these for logging, metrics, or debugging:
+
+```php
+add_action('pressgang_helm_response', function ($response, $request) {
+    error_log("Helm: {$request->model} returned " . strlen($response->content) . " chars");
+}, 10, 2);
 ```
 
 ## 🧪 Testing

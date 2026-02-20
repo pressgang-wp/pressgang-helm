@@ -14,7 +14,13 @@ return [
     'timeout' => 30,
     'retries' => 1,
     'logging' => false,
+    'tools' => [],
     'openai' => [
         'base_url' => 'https://api.openai.com/v1',
+    ],
+    'anthropic' => [
+        'base_url' => 'https://api.anthropic.com/v1',
+        'max_tokens' => 4096,
+        'api_version' => '2023-06-01',
     ],
 ];

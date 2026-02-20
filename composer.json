@@ -12,6 +12,9 @@
     "require": {
         "php": "^8.3"
     },
+    "suggest": {
+        "pressgang-wp/pressgang": "Required for the src/WP/ adapter layer (HelmServiceProvider, WpHttpTransport)."
+    },
     "require-dev": {
         "phpunit/phpunit": "^11.0"
     },
