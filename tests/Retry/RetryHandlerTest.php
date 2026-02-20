@@ -2,6 +2,7 @@
 
 namespace PressGang\Helm\Tests\Retry;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PressGang\Helm\Contracts\ProviderContract;
 use PressGang\Helm\DTO\ChatRequest;
 use PressGang\Helm\DTO\Message;
@@ -257,7 +258,7 @@ class RetryHandlerTest extends TestCase
         $this->assertSame('Fallback OK', $response->content);
     }
 
-    /** @dataProvider retryableCodeProvider */
+    #[DataProvider('retryableCodeProvider')]
     public function test_is_retryable_returns_true_for_transient_codes(int $code): void
     {
         $this->assertTrue(RetryHandler::isRetryable(new ProviderException('', $code)));
@@ -275,7 +276,7 @@ class RetryHandlerTest extends TestCase
         ];
     }
 
-    /** @dataProvider nonRetryableCodeProvider */
+    #[DataProvider('nonRetryableCodeProvider')]
     public function test_is_retryable_returns_false_for_client_errors(int $code): void
     {
         $this->assertFalse(RetryHandler::isRetryable(new ProviderException('', $code)));

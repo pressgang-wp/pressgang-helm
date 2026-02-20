@@ -267,6 +267,12 @@ $response = $helm
 
 Client errors (400, 401, 403, 404) are never retried — they skip directly to the next provider. All existing lifecycle hooks fire for each attempt, giving full observability.
 
+Failure semantics:
+- Retryable errors: `0` (timeout/network), `429`, and `500-599`.
+- Non-retryable errors: client errors such as `400`, `401`, `403`, `404`.
+- Fallback providers are tried in configured order after the primary is exhausted.
+- Cross-provider fallback requires provider-specific credentials (for example `helm.anthropic.api_key` when falling back from OpenAI to Anthropic).
+
 ### Lifecycle Hooks
 
 `HookAwareProvider` wraps every provider call with WordPress actions:
